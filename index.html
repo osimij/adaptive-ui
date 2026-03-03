@@ -34,7 +34,16 @@
     align-items: center;
     opacity: 0;
     position: relative;
-    background-attachment: fixed;
+    background: transparent;
+  }
+
+  .background-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
   }
 
   body::after {
@@ -51,6 +60,8 @@
   }
 
   .page-wrapper {
+    position: relative;
+    z-index: 1;
     width: 100%;
     max-width: 720px;
     padding: 40px 24px;
@@ -189,6 +200,7 @@
 </head>
 <body>
 
+<div class="background-layer" id="backgroundLayer" aria-hidden="true"></div>
 <div class="camera-indicator hidden" id="cameraIndicator"></div>
 <div class="camera-prompt hidden" id="cameraPrompt"><span>tap to adapt</span></div>
 
@@ -238,6 +250,7 @@
   const indicator = document.getElementById('cameraIndicator');
   const signature = document.getElementById('footerSignature');
   const prompt = document.getElementById('cameraPrompt');
+  const backgroundLayer = document.getElementById('backgroundLayer');
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   // Helpers
@@ -291,27 +304,146 @@
   }
   function smoothstep(t) { return t * t * (3 - 2 * t); }
 
-  // ─── Sky gradient presets (bright → dark) ───────────────────────
-  const skyPresets = [
-    // 0: Soft Dawn — bright room
-    [
-      { pos: 0,    color: hexToRgb('#9BBDEA') },
-      { pos: 0.55, color: hexToRgb('#F3D1C8') },
-      { pos: 1,    color: hexToRgb('#F69078') }
-    ],
-    // 1: Clear Midday
-    [
-      { pos: 0, color: hexToRgb('#A9DAF7') },
-      { pos: 1, color: hexToRgb('#0780CD') }
-    ],
-    // 2: Deep Night — dark room
-    [
-      { pos: 0.1149, color: hexToRgb('#040941') },
-      { pos: 0.9146, color: hexToRgb('#003C9F') }
-    ]
+  // ─── Camera-adaptive gradient presets (provided by user) ────────
+  const gradientPresets = [
+    {
+      type: 'linear',
+      angle: '180deg',
+      stops: [
+        { pos: 0.2002, color: hexToRgb('#87B3E1') },
+        { pos: 0.5471, color: hexToRgb('#D6BBCA') },
+        { pos: 0.7019, color: hexToRgb('#C49AC2') },
+        { pos: 1.0, color: hexToRgb('#7B9ED4') }
+      ]
+    },
+    {
+      type: 'radial',
+      shape: '328.13% 100% at 50% 100%',
+      stops: [
+        { pos: 0.0855, color: hexToRgb('#FC550E') },
+        { pos: 0.3434, color: hexToRgb('#E49939') },
+        { pos: 0.5928, color: hexToRgb('#47545C') },
+        { pos: 0.89, color: hexToRgb('#030406') }
+      ]
+    },
+    {
+      type: 'linear',
+      angle: '154deg',
+      stops: [
+        { pos: 0.1644, color: hexToRgb('#DBBEA0') },
+        { pos: 0.4746, color: hexToRgb('#FBB26D') },
+        { pos: 0.9031, color: hexToRgb('#FF694E') }
+      ]
+    },
+    {
+      type: 'linear',
+      angle: '180deg',
+      stops: [
+        { pos: 0.2256, color: hexToRgb('#356B98') },
+        { pos: 0.7169, color: hexToRgb('#FFCF7D') },
+        { pos: 0.965, color: hexToRgb('#FB8C29') }
+      ]
+    },
+    {
+      type: 'linear',
+      angle: '180deg',
+      stops: [
+        { pos: 0.0926, color: hexToRgb('#4D70AA') },
+        { pos: 0.5223, color: hexToRgb('#E4A593') },
+        { pos: 0.7664, color: hexToRgb('#FF694E') },
+        { pos: 1.0, color: hexToRgb('#FB9E34') }
+      ]
+    }
   ];
 
-  // Text theme per sky preset
+  function normalizeStops(stops) {
+    const sorted = stops
+      .slice()
+      .sort((a, b) => a.pos - b.pos)
+      .map(s => ({ pos: s.pos, color: s.color.slice() }));
+    if (sorted[0].pos > 0) sorted.unshift({ pos: 0, color: sorted[0].color.slice() });
+    if (sorted[sorted.length - 1].pos < 1) sorted.push({ pos: 1, color: sorted[sorted.length - 1].color.slice() });
+    return sorted;
+  }
+
+  function densifyStops(stops) {
+    const dense = [{ pos: stops[0].pos, color: stops[0].color.slice() }];
+    for (let i = 0; i < stops.length - 1; i++) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      dense.push({
+        pos: a.pos + (b.pos - a.pos) * 0.5,
+        color: lerpOklch(a.color, b.color, 0.5)
+      });
+      dense.push({ pos: b.pos, color: b.color.slice() });
+    }
+    return dense;
+  }
+
+  function gradientBrightness(stops) {
+    let weighted = 0;
+    let span = 0;
+    for (let i = 0; i < stops.length - 1; i++) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      const seg = Math.max(b.pos - a.pos, 0.0001);
+      const mid = lerpOklch(a.color, b.color, 0.5);
+      weighted += ((mid[0] + mid[1] + mid[2]) / 3) * seg;
+      span += seg;
+    }
+    return span > 0 ? weighted / span : 128;
+  }
+
+  function warmthShift(rgb, warmth) {
+    if (warmth > 0.3) {
+      const i = (warmth - 0.3) / 0.7;
+      return [clamp(rgb[0] + 12 * i, 0, 255), clamp(rgb[1] + 5 * i, 0, 255), clamp(rgb[2] - 8 * i, 0, 255)];
+    }
+    if (warmth < -0.3) {
+      const i = (-warmth - 0.3) / 0.7;
+      return [clamp(rgb[0] - 8 * i, 0, 255), clamp(rgb[1] - 2 * i, 0, 255), clamp(rgb[2] + 11 * i, 0, 255)];
+    }
+    return rgb.slice();
+  }
+
+  function buildGradientCss(preset, alpha, warmth) {
+    const denseStops = densifyStops(preset.stopsNormalized);
+    const stopString = denseStops.map(stop => {
+      const shifted = warmthShift(stop.color, warmth);
+      return `${rgbStr(shifted[0], shifted[1], shifted[2], alpha)} ${(stop.pos * 100).toFixed(2)}%`;
+    }).join(', ');
+
+    if (preset.type === 'radial') {
+      return `radial-gradient(${preset.shape}, ${stopString})`;
+    }
+    return `linear-gradient(${preset.angle}, ${stopString})`;
+  }
+
+  const orderedGradients = gradientPresets
+    .map(preset => ({ ...preset, stopsNormalized: normalizeStops(preset.stops) }))
+    .map(preset => ({ ...preset, brightnessAnchor: gradientBrightness(preset.stopsNormalized) }))
+    .sort((a, b) => b.brightnessAnchor - a.brightnessAnchor);
+
+  const gradientAnchors = orderedGradients.map(g => g.brightnessAnchor);
+
+  function getGradientBlend(brightness) {
+    if (brightness >= gradientAnchors[0]) return { a: 0, b: 0, t: 0 };
+    const lastIndex = gradientAnchors.length - 1;
+    if (brightness <= gradientAnchors[lastIndex]) return { a: lastIndex, b: lastIndex, t: 0 };
+
+    for (let i = 0; i < gradientAnchors.length - 1; i++) {
+      const upper = gradientAnchors[i];
+      const lower = gradientAnchors[i + 1];
+      if (brightness <= upper && brightness >= lower) {
+        const raw = (upper - brightness) / Math.max(upper - lower, 0.0001);
+        return { a: i, b: i + 1, t: smoothstep(raw) };
+      }
+    }
+
+    return { a: 0, b: 0, t: 0 };
+  }
+
+  // Text theme per brightness band
   const textPresets = [
     // Dawn: dark text on pastel sky
     { text: [40,40,48],     tA: 1,    sub: [90,90,100],    sA: 1,    nav: [140,140,155], nA: 1 },
@@ -321,29 +453,14 @@
     { text: [255,245,230],  tA: 0.85, sub: [255,245,230],  sA: 0.45, nav: [255,245,230], nA: 0.25 }
   ];
 
-  // Sample a multi-stop gradient at position t (0-1)
-  function sampleGrad(stops, t) {
-    if (t <= stops[0].pos) return stops[0].color.slice();
-    if (t >= stops[stops.length - 1].pos) return stops[stops.length - 1].color.slice();
-    for (let i = 0; i < stops.length - 1; i++) {
-      if (t >= stops[i].pos && t <= stops[i + 1].pos) {
-        const f = (t - stops[i].pos) / (stops[i + 1].pos - stops[i].pos);
-        return lerpColor(stops[i].color, stops[i + 1].color, f);
-      }
-    }
-    return stops[stops.length - 1].color.slice();
-  }
+  const textAnchors = [220, 150, 55]; // Bright, medium, dark
 
-  // Continuous blending — each preset anchored at a brightness value,
-  // always interpolating between the two nearest with smoothstep easing
-  const anchors = [225, 158, 45]; // Dawn, Midday, Night
-
-  function getBlend(brightness) {
-    if (brightness >= anchors[0]) return { a: 0, b: 0, t: 0 };
-    if (brightness <= anchors[2]) return { a: 2, b: 2, t: 0 };
-    for (let i = 0; i < anchors.length - 1; i++) {
-      if (brightness <= anchors[i] && brightness >= anchors[i + 1]) {
-        const raw = (anchors[i] - brightness) / (anchors[i] - anchors[i + 1]);
+  function getTextBlend(brightness) {
+    if (brightness >= textAnchors[0]) return { a: 0, b: 0, t: 0 };
+    if (brightness <= textAnchors[2]) return { a: 2, b: 2, t: 0 };
+    for (let i = 0; i < textAnchors.length - 1; i++) {
+      if (brightness <= textAnchors[i] && brightness >= textAnchors[i + 1]) {
+        const raw = (textAnchors[i] - brightness) / (textAnchors[i] - textAnchors[i + 1]);
         return { a: i, b: i + 1, t: smoothstep(raw) };
       }
     }
@@ -351,22 +468,21 @@
   }
 
   function computeTheme(brightness, warmth) {
-    const { a, b, t } = getBlend(brightness);
+    const gradBlend = getGradientBlend(brightness);
+    const gradA = orderedGradients[gradBlend.a];
+    const gradB = orderedGradients[gradBlend.b];
+    const layerA = buildGradientCss(gradA, 1 - gradBlend.t, warmth);
+    const layerB = buildGradientCss(gradB, gradBlend.t, warmth);
+    const gradient = gradBlend.a === gradBlend.b ? layerA : `${layerA}, ${layerB}`;
 
-    // ── Background gradient ──
-    const pts = [0, 0.07, 0.15, 0.22, 0.30, 0.38, 0.46, 0.54, 0.62, 0.70, 0.78, 0.85, 0.93, 1.0];
-    const gradColors = pts.map(p => {
-      const cA = sampleGrad(skyPresets[a], p);
-      const cB = sampleGrad(skyPresets[b], p);
-      return lerpColor(cA, cB, t);
-    });
-    document.body.style.background = 'linear-gradient(to bottom, ' +
-      gradColors.map((c, i) =>
-        rgbStr(c[0], c[1], c[2]) + ' ' + (pts[i] * 100).toFixed(1) + '%'
-      ).join(', ') + ')';
-    document.body.style.backgroundAttachment = 'fixed';
+    if (backgroundLayer) {
+      backgroundLayer.style.backgroundImage = gradient;
+    } else {
+      document.body.style.background = gradient;
+    }
 
     // ── Text colors ──
+    const { a, b, t } = getTextBlend(brightness);
     const pA = textPresets[a], pB = textPresets[b];
     const txtRgb  = lerpColor(pA.text, pB.text, t);
     const txtA    = lerp(pA.tA, pB.tA, t);
@@ -406,7 +522,7 @@
     if (!cameraDenied) {
       indicator.style.backgroundColor = brightness <= 125
         ? 'rgba(255,255,255,0.3)'
-        : 'rgba(255,255,255,0.5)';
+        : 'rgb(204,204,204)';
     }
 
     // CSS custom properties
