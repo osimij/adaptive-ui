@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Aether</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,7 +40,10 @@
 
   .background-layer {
     position: fixed;
-    inset: -2px;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: calc(-2px - env(safe-area-inset-bottom));
     z-index: 0;
     pointer-events: none;
     background-repeat: no-repeat;
@@ -50,7 +53,10 @@
   body::after {
     content: '';
     position: fixed;
-    inset: 0;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: calc(-2px - env(safe-area-inset-bottom));
     pointer-events: none;
     z-index: 9999;
     opacity: 0.028;
