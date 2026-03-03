@@ -226,6 +226,8 @@
   let currentWarmth = 0;
   let targetBrightness = 200;
   let targetWarmth = 0;
+  let sensedBrightness = 200;
+  let sensedWarmth = 0;
   let cameraDenied = false;
   let video = null;
   let canvas = null;
@@ -285,7 +287,22 @@
     let a = rgbToOklch(c1), b = rgbToOklch(c2);
     return oklchToRgb([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, lerpAngle(a[2], b[2], t)]);
   }
-  function smoothstep(t) { return t * t * (3 - 2 * t); }
+  function smootherstep(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  function adaptiveSettleFactor(delta, maxDelta, riseBoost, fallDamp) {
+    const magnitude = clamp(Math.abs(delta) / maxDelta, 0, 1);
+    // Small changes settle faster; large shifts drift more slowly.
+    let factor = lerp(0.024, 0.0065, magnitude);
+    if (delta > 0) factor *= riseBoost;
+    if (delta < 0) factor *= fallDamp;
+    return clamp(factor, 0.004, 0.03);
+  }
+  function remapSensorBrightness(avgBrightness, highlightBrightness) {
+    // Camera auto-exposure compresses usable range; blend mean + highlights
+    // then remap to a broader perceptual range.
+    const fused = avgBrightness * 0.7 + highlightBrightness * 0.3;
+    const normalized = clamp((fused - 38) / (188 - 38), 0, 1);
+    return Math.pow(normalized, 0.86) * 255;
+  }
 
   // ─── Camera-adaptive gradient presets (provided by user) ────────
   const gradientPresets = [
@@ -415,13 +432,14 @@
   // Explicit brightness mapping:
   // - very dark rooms -> deep-night-blue (legacy dark blue)
   // - slight dim rooms -> dim-radial (current dark look)
+  // Anchors are tuned to practical webcam ranges after sensor remapping.
   const gradientStages = [
-    { id: 'haze-day', anchor: 236 },
-    { id: 'warm-terracotta', anchor: 205 },
-    { id: 'sunset-band', anchor: 168 },
-    { id: 'mid-neutral', anchor: 128 },
+    { id: 'haze-day', anchor: 212 },
+    { id: 'warm-terracotta', anchor: 180 },
+    { id: 'sunset-band', anchor: 146 },
+    { id: 'mid-neutral', anchor: 112 },
     { id: 'dim-radial', anchor: 80 },
-    { id: 'deep-night-blue', anchor: 22 }
+    { id: 'deep-night-blue', anchor: 42 }
   ];
 
   const orderedGradients = gradientStages
@@ -435,6 +453,11 @@
   const gradientAnchors = orderedGradients.map(g => g.brightnessAnchor);
 
   function getGradientBlend(brightness) {
+    // Hard-lock true dark to the legacy deep-blue night gradient.
+    if (brightness <= 32) {
+      const lastIndex = gradientAnchors.length - 1;
+      return { a: lastIndex, b: lastIndex, t: 0 };
+    }
     if (brightness >= gradientAnchors[0]) return { a: 0, b: 0, t: 0 };
     const lastIndex = gradientAnchors.length - 1;
     if (brightness <= gradientAnchors[lastIndex]) return { a: lastIndex, b: lastIndex, t: 0 };
@@ -444,7 +467,7 @@
       const lower = gradientAnchors[i + 1];
       if (brightness <= upper && brightness >= lower) {
         const raw = (upper - brightness) / Math.max(upper - lower, 0.0001);
-        return { a: i, b: i + 1, t: smoothstep(raw) };
+        return { a: i, b: i + 1, t: smootherstep(raw) };
       }
     }
 
@@ -469,7 +492,7 @@
     for (let i = 0; i < textAnchors.length - 1; i++) {
       if (brightness <= textAnchors[i] && brightness >= textAnchors[i + 1]) {
         const raw = (textAnchors[i] - brightness) / (textAnchors[i] - textAnchors[i + 1]);
-        return { a: i, b: i + 1, t: smoothstep(raw) };
+        return { a: i, b: i + 1, t: smootherstep(raw) };
       }
     }
     return { a: 0, b: 0, t: 0 };
@@ -485,16 +508,29 @@
 
     if (backgroundLayer) {
       backgroundLayer.style.backgroundImage = gradient;
-      // Use a solid color for html/body so iOS overscroll regions don't show
-      // a mis-stretched gradient. Pick the first stop color of the dominant preset.
+      // Solid colors for html/body so iOS overscroll regions and Safari
+      // toolbar chrome match the gradient edges. html = top, body = bottom.
       const dominantPreset = orderedGradients[gradBlend.a];
-      const edgeColor = warmthShift(dominantPreset.stopsNormalized[0].color, warmth);
-      const solidBg = rgbStr(edgeColor[0], edgeColor[1], edgeColor[2]);
+      const topEdge = warmthShift(dominantPreset.stopsNormalized[0].color, warmth);
+      const bottomEdge = warmthShift(dominantPreset.stopsNormalized[dominantPreset.stopsNormalized.length - 1].color, warmth);
+
+      let topColor = topEdge;
+      let bottomColor = bottomEdge;
+      if (gradBlend.a !== gradBlend.b) {
+        const secondPreset = orderedGradients[gradBlend.b];
+        topColor = lerpOklch(topEdge, warmthShift(secondPreset.stopsNormalized[0].color, warmth), gradBlend.t);
+        bottomColor = lerpOklch(bottomEdge, warmthShift(secondPreset.stopsNormalized[secondPreset.stopsNormalized.length - 1].color, warmth), gradBlend.t);
+      }
+
+      const topBg = rgbStr(topColor[0], topColor[1], topColor[2]);
+      const bottomBg = rgbStr(bottomColor[0], bottomColor[1], bottomColor[2]);
+
       document.documentElement.style.backgroundImage = 'none';
-      document.documentElement.style.backgroundColor = solidBg;
+      document.documentElement.style.backgroundColor = topBg;
       document.body.style.backgroundImage = 'none';
-      document.body.style.backgroundColor = solidBg;
-      document.querySelector('meta[name="theme-color"]').setAttribute('content', solidBg);
+      document.body.style.backgroundColor = bottomBg;
+      const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeColorMeta) themeColorMeta.setAttribute('content', topBg);
     } else {
       document.body.style.background = gradient;
     }
@@ -550,11 +586,17 @@
 
   // Animation loop
   function animate() {
-    currentBrightness = lerp(currentBrightness, targetBrightness, 0.008);
-    currentWarmth = lerp(currentWarmth, targetWarmth, 0.008);
+    const bDelta = targetBrightness - currentBrightness;
+    const bFactor = adaptiveSettleFactor(bDelta, 90, 1.08, 0.84);
+    currentBrightness = lerp(currentBrightness, targetBrightness, bFactor);
 
-    if (Math.abs(currentBrightness - targetBrightness) < 0.05) currentBrightness = targetBrightness;
-    if (Math.abs(currentWarmth - targetWarmth) < 0.005) currentWarmth = targetWarmth;
+    const wDelta = targetWarmth - currentWarmth;
+    const wMagnitude = clamp(Math.abs(wDelta) / 0.45, 0, 1);
+    const wFactor = clamp(lerp(0.028, 0.010, wMagnitude), 0.008, 0.03);
+    currentWarmth = lerp(currentWarmth, targetWarmth, wFactor);
+
+    if (Math.abs(currentBrightness - targetBrightness) < 0.03) currentBrightness = targetBrightness;
+    if (Math.abs(currentWarmth - targetWarmth) < 0.003) currentWarmth = targetWarmth;
 
     computeTheme(currentBrightness, currentWarmth);
     animFrameId = requestAnimationFrame(animate);
@@ -591,7 +633,7 @@
       analyzeLight();
       fadeIn();
 
-      setInterval(analyzeLight, 2000);
+      setInterval(analyzeLight, 1400);
 
     } catch (e) {
       console.error('Camera init failed:', e.name, e.message);
@@ -601,6 +643,8 @@
 
   function cameraUnavailable() {
     cameraDenied = true;
+    sensedBrightness = 200;
+    sensedWarmth = 0;
     targetBrightness = 200;
     targetWarmth = 0;
     currentBrightness = 200;
@@ -623,6 +667,7 @@
     const data = imageData.data;
 
     let totalBrightness = 0;
+    let totalHighlight = 0;
     let totalWarmth = 0;
     let count = 0;
 
@@ -641,14 +686,29 @@
         const b = data[i + 2];
 
         totalBrightness += (r + g + b) / 3;
+        totalHighlight += Math.max(r, g, b);
         totalWarmth += (r - b) / 255;
         count++;
       }
     }
 
     if (count > 0) {
-      targetBrightness = clamp(totalBrightness / count, 0, 255);
-      targetWarmth = clamp(totalWarmth / count, -1, 1);
+      const avgBrightness = clamp(totalBrightness / count, 0, 255);
+      const highlightBrightness = clamp(totalHighlight / count, 0, 255);
+      const rawBrightness = remapSensorBrightness(avgBrightness, highlightBrightness);
+      const rawWarmth = clamp(totalWarmth / count, -1, 1);
+
+      // Sensor-level damping prevents tiny flicker from nudging the theme.
+      const bDiff = rawBrightness - sensedBrightness;
+      const wDiff = rawWarmth - sensedWarmth;
+      const bAlpha = Math.abs(bDiff) > 30 ? 0.22 : 0.12;
+      const wAlpha = Math.abs(wDiff) > 0.25 ? 0.24 : 0.12;
+
+      if (Math.abs(bDiff) > 0.6) sensedBrightness = clamp(sensedBrightness + bDiff * bAlpha, 0, 255);
+      if (Math.abs(wDiff) > 0.015) sensedWarmth = clamp(sensedWarmth + wDiff * wAlpha, -1, 1);
+
+      targetBrightness = sensedBrightness;
+      targetWarmth = sensedWarmth;
     }
   }
 
