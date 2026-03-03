@@ -307,6 +307,7 @@
   // ─── Camera-adaptive gradient presets (provided by user) ────────
   const gradientPresets = [
     {
+      id: 'haze-day',
       type: 'linear',
       angle: '180deg',
       stops: [
@@ -317,16 +318,19 @@
       ]
     },
     {
+      id: 'dim-radial',
       type: 'radial',
       shape: '328.13% 100% at 50% 100%',
       stops: [
         { pos: 0.0855, color: hexToRgb('#FC550E') },
         { pos: 0.3434, color: hexToRgb('#E49939') },
-        { pos: 0.5928, color: hexToRgb('#47545C') },
+        // Slightly bluer neutral to avoid green cast in mid-light blends
+        { pos: 0.5928, color: hexToRgb('#3F455B') },
         { pos: 0.89, color: hexToRgb('#030406') }
       ]
     },
     {
+      id: 'warm-terracotta',
       type: 'linear',
       angle: '154deg',
       stops: [
@@ -336,15 +340,19 @@
       ]
     },
     {
+      id: 'mid-neutral',
       type: 'linear',
       angle: '180deg',
       stops: [
         { pos: 0.2256, color: hexToRgb('#356B98') },
+        // Bridge blue -> amber through muted mauve, not green
+        { pos: 0.495, color: hexToRgb('#B8918C') },
         { pos: 0.7169, color: hexToRgb('#FFCF7D') },
         { pos: 0.965, color: hexToRgb('#FB8C29') }
       ]
     },
     {
+      id: 'sunset-band',
       type: 'linear',
       angle: '180deg',
       stops: [
@@ -352,6 +360,17 @@
         { pos: 0.5223, color: hexToRgb('#E4A593') },
         { pos: 0.7664, color: hexToRgb('#FF694E') },
         { pos: 1.0, color: hexToRgb('#FB9E34') }
+      ]
+    },
+    {
+      // Legacy deep-night gradient used for very dark rooms
+      id: 'deep-night-blue',
+      type: 'linear',
+      angle: '180deg',
+      stops: [
+        { pos: 0.1149, color: hexToRgb('#040941') },
+        { pos: 0.55, color: hexToRgb('#052664') },
+        { pos: 0.9146, color: hexToRgb('#003C9F') }
       ]
     }
   ];
@@ -380,20 +399,6 @@
     return dense;
   }
 
-  function gradientBrightness(stops) {
-    let weighted = 0;
-    let span = 0;
-    for (let i = 0; i < stops.length - 1; i++) {
-      const a = stops[i];
-      const b = stops[i + 1];
-      const seg = Math.max(b.pos - a.pos, 0.0001);
-      const mid = lerpOklch(a.color, b.color, 0.5);
-      weighted += ((mid[0] + mid[1] + mid[2]) / 3) * seg;
-      span += seg;
-    }
-    return span > 0 ? weighted / span : 128;
-  }
-
   function warmthShift(rgb, warmth) {
     if (warmth > 0.3) {
       const i = (warmth - 0.3) / 0.7;
@@ -419,10 +424,30 @@
     return `linear-gradient(${preset.angle}, ${stopString})`;
   }
 
-  const orderedGradients = gradientPresets
-    .map(preset => ({ ...preset, stopsNormalized: normalizeStops(preset.stops) }))
-    .map(preset => ({ ...preset, brightnessAnchor: gradientBrightness(preset.stopsNormalized) }))
-    .sort((a, b) => b.brightnessAnchor - a.brightnessAnchor);
+  const gradientLookup = {};
+  gradientPresets.forEach(preset => {
+    gradientLookup[preset.id] = { ...preset, stopsNormalized: normalizeStops(preset.stops) };
+  });
+
+  // Explicit brightness mapping:
+  // - very dark rooms -> deep-night-blue (legacy dark blue)
+  // - slight dim rooms -> dim-radial (current dark look)
+  const gradientStages = [
+    { id: 'haze-day', anchor: 236 },
+    { id: 'warm-terracotta', anchor: 205 },
+    { id: 'sunset-band', anchor: 168 },
+    { id: 'mid-neutral', anchor: 128 },
+    { id: 'dim-radial', anchor: 80 },
+    { id: 'deep-night-blue', anchor: 22 }
+  ];
+
+  const orderedGradients = gradientStages
+    .map(stage => {
+      const preset = gradientLookup[stage.id];
+      if (!preset) return null;
+      return { ...preset, brightnessAnchor: stage.anchor };
+    })
+    .filter(Boolean);
 
   const gradientAnchors = orderedGradients.map(g => g.brightnessAnchor);
 
