@@ -478,12 +478,17 @@
 
     if (backgroundLayer) {
       backgroundLayer.style.backgroundImage = gradient;
-      // Match root/background fallback to the active gradient so viewport seams are invisible.
-      document.documentElement.style.backgroundImage = gradient;
-      document.body.style.backgroundImage = gradient;
+      // Use a solid color for html/body so iOS overscroll regions don't show
+      // a mis-stretched gradient. Pick the first stop color of the dominant preset.
+      const dominantPreset = orderedGradients[gradBlend.a];
+      const edgeColor = warmthShift(dominantPreset.stopsNormalized[0].color, warmth);
+      const solidBg = rgbStr(edgeColor[0], edgeColor[1], edgeColor[2]);
+      document.documentElement.style.backgroundImage = 'none';
+      document.documentElement.style.backgroundColor = solidBg;
+      document.body.style.backgroundImage = 'none';
+      document.body.style.backgroundColor = solidBg;
     } else {
       document.body.style.background = gradient;
-      document.documentElement.style.backgroundImage = gradient;
     }
 
     // ── Text colors ──
