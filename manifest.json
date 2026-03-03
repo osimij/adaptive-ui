@@ -1,0 +1,25 @@
+{
+  "name": "Aether",
+  "short_name": "Aether",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#87B3E1",
+  "background_color": "#87B3E1",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}
