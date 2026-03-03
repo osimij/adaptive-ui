@@ -168,7 +168,9 @@
     text-align: center;
     z-index: 200;
     cursor: pointer;
+    padding: 16px 0;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
 
   .camera-prompt span {
@@ -426,11 +428,18 @@
 
   // Camera & light analysis
   async function initCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.warn('getUserMedia not available — requires HTTPS');
+      cameraUnavailable();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 160, height: 120 } });
       video = document.createElement('video');
       video.srcObject = stream;
       video.setAttribute('playsinline', '');
+      video.setAttribute('muted', '');
+      video.muted = true;
       video.style.display = 'none';
       document.body.appendChild(video);
       await video.play();
@@ -453,16 +462,21 @@
       setInterval(analyzeLight, 2000);
 
     } catch (e) {
-      cameraDenied = true;
-      targetBrightness = 200;
-      targetWarmth = 0;
-      currentBrightness = 200;
-      currentWarmth = 0;
-      indicator.classList.add('hidden');
-      signature.textContent = '';
-      firstReadingDone = true;
-      fadeIn();
+      console.error('Camera init failed:', e.name, e.message);
+      cameraUnavailable();
     }
+  }
+
+  function cameraUnavailable() {
+    cameraDenied = true;
+    targetBrightness = 200;
+    targetWarmth = 0;
+    currentBrightness = 200;
+    currentWarmth = 0;
+    indicator.classList.add('hidden');
+    signature.textContent = '';
+    firstReadingDone = true;
+    fadeIn();
   }
 
   function analyzeLight() {
