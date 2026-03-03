@@ -55,7 +55,11 @@
     pointer-events: none;
     background-repeat: no-repeat;
     transform: translateZ(0);
+    will-change: opacity, background-image;
   }
+
+  #backgroundLayerA { opacity: 1; }
+  #backgroundLayerB { opacity: 0; }
 
   body::after {
     content: '';
@@ -90,13 +94,13 @@
     align-items: baseline;
     gap: 32px;
     margin-bottom: 120px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .wordmark {
     font-size: 13px;
     letter-spacing: -0.18px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .nav-links {
@@ -109,7 +113,7 @@
     font-size: 14px;
     letter-spacing: -0.18px;
     cursor: default;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   /* Article */
@@ -123,14 +127,14 @@
     letter-spacing: -0.18px;
     line-height: 1.3;
     margin-bottom: 12px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .subline {
     font-size: 14px;
     letter-spacing: -0.18px;
     margin-bottom: 64px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .body-text {
@@ -139,7 +143,7 @@
     letter-spacing: -0.18px;
     line-height: 1.72;
     margin-bottom: 32px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   /* Footer */
@@ -152,7 +156,7 @@
   .footer-location {
     font-size: 13px;
     letter-spacing: -0.18px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .footer-signature {
@@ -160,7 +164,7 @@
     letter-spacing: 2px;
     text-transform: uppercase;
     margin-top: 16px;
-    transition: color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   /* Camera indicator */
@@ -173,7 +177,7 @@
     border-radius: 9999px;
     z-index: 100;
     animation: pulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-    transition: background-color 2.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 1.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .camera-indicator.hidden {
@@ -188,7 +192,8 @@
 </head>
 <body>
 
-<div class="background-layer" id="backgroundLayer" aria-hidden="true"></div>
+<div class="background-layer" id="backgroundLayerA" aria-hidden="true"></div>
+<div class="background-layer" id="backgroundLayerB" aria-hidden="true"></div>
 <div class="camera-indicator hidden" id="cameraIndicator"></div>
 
 <div class="page-wrapper">
@@ -233,10 +238,19 @@
   let canvas = null;
   let ctx = null;
   let animFrameId = null;
+  let lastGradientPaintA = '';
+  let lastGradientPaintB = '';
+  let lastBlendOpacity = -1;
+  let lastTopBg = '';
+  let lastBottomBg = '';
+  let lastThemeColor = '';
+
+  const gradientCssCache = new Map();
 
   const indicator = document.getElementById('cameraIndicator');
   const signature = document.getElementById('footerSignature');
-  const backgroundLayer = document.getElementById('backgroundLayer');
+  const backgroundLayerA = document.getElementById('backgroundLayerA');
+  const backgroundLayerB = document.getElementById('backgroundLayerB');
 
   // Helpers
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -290,18 +304,40 @@
   function smootherstep(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
   function adaptiveSettleFactor(delta, maxDelta, riseBoost, fallDamp) {
     const magnitude = clamp(Math.abs(delta) / maxDelta, 0, 1);
-    // Small changes settle faster; large shifts drift more slowly.
-    let factor = lerp(0.024, 0.0065, magnitude);
+    // Bigger light shifts should feel like eye adaptation, not a snap.
+    let factor = lerp(0.032, 0.012, magnitude);
     if (delta > 0) factor *= riseBoost;
     if (delta < 0) factor *= fallDamp;
-    return clamp(factor, 0.004, 0.03);
+    return clamp(factor, 0.01, 0.05);
   }
-  function remapSensorBrightness(avgBrightness, highlightBrightness) {
-    // Camera auto-exposure compresses usable range; blend mean + highlights
-    // then remap to a broader perceptual range.
-    const fused = avgBrightness * 0.7 + highlightBrightness * 0.3;
-    const normalized = clamp((fused - 38) / (188 - 38), 0, 1);
-    return Math.pow(normalized, 0.86) * 255;
+  function remapSensorBrightness(avgBrightness, midPercentileBrightness, upperPercentileBrightness, highlightBrightness) {
+    // Prioritize exposure/upper-percentile cues so bright office scenes do not
+    // collapse into dim themes when parts of frame are dark.
+    const fused = avgBrightness * 0.25
+      + midPercentileBrightness * 0.35
+      + upperPercentileBrightness * 0.25
+      + highlightBrightness * 0.15;
+    const normalized = clamp((fused - 36) / (172 - 36), 0, 1);
+    return Math.pow(normalized, 0.82) * 255;
+  }
+  function percentileFromHistogram(hist, totalWeight, percentile) {
+    if (totalWeight <= 0) return 0;
+    const target = totalWeight * clamp(percentile, 0, 1);
+    let running = 0;
+    for (let i = 0; i < hist.length; i++) {
+      running += hist[i];
+      if (running >= target) return i;
+    }
+    return hist.length - 1;
+  }
+  function hueDistanceDegrees(h1, h2) {
+    const delta = Math.abs(h1 - h2) % 360;
+    return delta > 180 ? 360 - delta : delta;
+  }
+  function segmentHintBias(aLch, bLch) {
+    const lightnessDrift = clamp((aLch[0] - bLch[0]) * 1.35, -1, 1);
+    const chromaDrift = clamp((bLch[1] - aLch[1]) * 2.4, -1, 1);
+    return clamp(0.5 + lightnessDrift * 0.1 + chromaDrift * 0.04, 0.36, 0.64);
   }
 
   // ─── Camera-adaptive gradient presets (provided by user) ────────
@@ -312,8 +348,11 @@
       angle: '180deg',
       stops: [
         { pos: 0.2002, color: hexToRgb('#87B3E1') },
-        { pos: 0.5471, color: hexToRgb('#D6BBCA') },
-        { pos: 0.7019, color: hexToRgb('#C49AC2') },
+        { pos: 0.4308, color: hexToRgb('#C0B9D0') },
+        { pos: 0.5081, color: hexToRgb('#CBB9CD') },
+        { pos: 0.6134, color: hexToRgb('#CFAEC7') },
+        { pos: 0.6856, color: hexToRgb('#CAA5C5') },
+        { pos: 0.7656, color: hexToRgb('#C39EC4') },
         { pos: 1.0, color: hexToRgb('#7B9ED4') }
       ]
     },
@@ -323,20 +362,13 @@
       shape: '328.13% 100% at 50% 100%',
       stops: [
         { pos: 0.0855, color: hexToRgb('#FC550E') },
-        { pos: 0.3434, color: hexToRgb('#E49939') },
-        // Slightly bluer neutral to avoid green cast in mid-light blends
-        { pos: 0.5928, color: hexToRgb('#3F455B') },
+        { pos: 0.236, color: hexToRgb('#F0A14A') },
+        { pos: 0.392, color: hexToRgb('#C08A73') },
+        { pos: 0.526, color: hexToRgb('#7D6A72') },
+        // Hold a cool neutral before rolling into near-black.
+        { pos: 0.672, color: hexToRgb('#3F455B') },
+        { pos: 0.802, color: hexToRgb('#1A2030') },
         { pos: 0.89, color: hexToRgb('#030406') }
-      ]
-    },
-    {
-      id: 'warm-terracotta',
-      type: 'linear',
-      angle: '154deg',
-      stops: [
-        { pos: 0.1644, color: hexToRgb('#DBBEA0') },
-        { pos: 0.4746, color: hexToRgb('#FBB26D') },
-        { pos: 0.9031, color: hexToRgb('#FF694E') }
       ]
     },
     {
@@ -345,9 +377,12 @@
       angle: '180deg',
       stops: [
         { pos: 0.2256, color: hexToRgb('#356B98') },
-        // Bridge blue -> amber through muted mauve, not green
+        { pos: 0.374, color: hexToRgb('#6F7D9B') },
+        // Bridge blue -> amber through muted mauve and warm sand, not green
         { pos: 0.495, color: hexToRgb('#B8918C') },
+        { pos: 0.602, color: hexToRgb('#D6AB90') },
         { pos: 0.7169, color: hexToRgb('#FFCF7D') },
+        { pos: 0.832, color: hexToRgb('#FDB45A') },
         { pos: 0.965, color: hexToRgb('#FB8C29') }
       ]
     },
@@ -357,8 +392,12 @@
       angle: '180deg',
       stops: [
         { pos: 0.0926, color: hexToRgb('#4D70AA') },
+        { pos: 0.284, color: hexToRgb('#7A86B1') },
+        { pos: 0.451, color: hexToRgb('#B793A7') },
         { pos: 0.5223, color: hexToRgb('#E4A593') },
+        { pos: 0.646, color: hexToRgb('#F48A76') },
         { pos: 0.7664, color: hexToRgb('#FF694E') },
+        { pos: 0.884, color: hexToRgb('#FF7E42') },
         { pos: 1.0, color: hexToRgb('#FB9E34') }
       ]
     },
@@ -385,18 +424,45 @@
     return sorted;
   }
 
-  function densifyStops(stops) {
-    const dense = [{ pos: stops[0].pos, color: stops[0].color.slice() }];
+  function buildAdaptiveSmoothStops(stops) {
+    const smooth = [{ pos: stops[0].pos, color: stops[0].color.slice() }];
+
     for (let i = 0; i < stops.length - 1; i++) {
       const a = stops[i];
       const b = stops[i + 1];
-      dense.push({
-        pos: a.pos + (b.pos - a.pos) * 0.5,
-        color: lerpOklch(a.color, b.color, 0.5)
-      });
-      dense.push({ pos: b.pos, color: b.color.slice() });
+      const segSpan = b.pos - a.pos;
+      if (segSpan <= 0) continue;
+
+      const aLch = rgbToOklch(a.color);
+      const bLch = rgbToOklch(b.color);
+      const hueJump = hueDistanceDegrees(aLch[2], bLch[2]);
+      const chromaAvg = (aLch[1] + bLch[1]) * 0.5;
+      const lightnessJump = Math.abs(aLch[0] - bLch[0]);
+      const stress = clamp((hueJump / 90) * 0.55 + chromaAvg * 1.6 + lightnessJump * 1.15, 0, 1);
+      const hint = segmentHintBias(aLch, bLch);
+
+      // Hint-like midpoint placement + optional micro-stops on difficult segments.
+      const localPoints = stress > 0.55
+        ? [hint * 0.55, hint, hint + (1 - hint) * 0.52]
+        : stress > 0.3
+          ? [hint * 0.72, hint, hint + (1 - hint) * 0.36]
+          : [hint];
+
+      let previousPoint = 0;
+      for (let j = 0; j < localPoints.length; j++) {
+        const localT = clamp(localPoints[j], 0.08, 0.92);
+        if (localT <= previousPoint + 0.03) continue;
+        previousPoint = localT;
+        smooth.push({
+          pos: a.pos + segSpan * localT,
+          color: lerpOklch(a.color, b.color, localT)
+        });
+      }
+
+      smooth.push({ pos: b.pos, color: b.color.slice() });
     }
-    return dense;
+
+    return smooth;
   }
 
   function warmthShift(rgb, warmth) {
@@ -411,22 +477,37 @@
     return rgb.slice();
   }
 
-  function buildGradientCss(preset, alpha, warmth) {
-    const denseStops = densifyStops(preset.stopsNormalized);
-    const stopString = denseStops.map(stop => {
-      const shifted = warmthShift(stop.color, warmth);
-      return `${rgbStr(shifted[0], shifted[1], shifted[2], alpha)} ${(stop.pos * 100).toFixed(2)}%`;
+  function buildGradientCss(preset, warmth) {
+    const warmthQuantized = clamp(Math.round(warmth * 300) / 300, -1, 1);
+    const cacheKey = `${preset.id}|${warmthQuantized.toFixed(3)}`;
+    const cached = gradientCssCache.get(cacheKey);
+    if (cached) return cached;
+
+    const stopString = preset.smoothStops.map(stop => {
+      const shifted = warmthShift(stop.color, warmthQuantized);
+      return `${rgbStr(shifted[0], shifted[1], shifted[2])} ${(stop.pos * 100).toFixed(2)}%`;
     }).join(', ');
 
+    let css;
     if (preset.type === 'radial') {
-      return `radial-gradient(${preset.shape}, ${stopString})`;
+      css = `radial-gradient(${preset.shape}, ${stopString})`;
+    } else {
+      css = `linear-gradient(${preset.angle}, ${stopString})`;
     }
-    return `linear-gradient(${preset.angle}, ${stopString})`;
+
+    if (gradientCssCache.size > 1200) gradientCssCache.clear();
+    gradientCssCache.set(cacheKey, css);
+    return css;
   }
 
   const gradientLookup = {};
   gradientPresets.forEach(preset => {
-    gradientLookup[preset.id] = { ...preset, stopsNormalized: normalizeStops(preset.stops) };
+    const stopsNormalized = normalizeStops(preset.stops);
+    gradientLookup[preset.id] = {
+      ...preset,
+      stopsNormalized,
+      smoothStops: buildAdaptiveSmoothStops(stopsNormalized)
+    };
   });
 
   // Explicit brightness mapping:
@@ -434,25 +515,49 @@
   // - slight dim rooms -> dim-radial (current dark look)
   // Anchors are tuned to practical webcam ranges after sensor remapping.
   const gradientStages = [
-    { id: 'haze-day', anchor: 212 },
-    { id: 'warm-terracotta', anchor: 180 },
-    { id: 'sunset-band', anchor: 146 },
-    { id: 'mid-neutral', anchor: 112 },
-    { id: 'dim-radial', anchor: 80 },
-    { id: 'deep-night-blue', anchor: 42 }
+    { id: 'haze-day', anchor: 178 },
+    { id: 'sunset-band', anchor: 142 },
+    { id: 'mid-neutral', anchor: 108 },
+    { id: 'dim-radial', anchor: 76 },
+    { id: 'deep-night-blue', anchor: 40 }
   ];
 
-  const orderedGradients = gradientStages
-    .map(stage => {
-      const preset = gradientLookup[stage.id];
-      if (!preset) return null;
-      return { ...preset, brightnessAnchor: stage.anchor };
-    })
-    .filter(Boolean);
+  function buildOrderedGradients(stages, lookup) {
+    const resolved = [];
+    const missing = [];
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i];
+      const preset = lookup[stage.id];
+      if (!preset) {
+        missing.push(stage.id);
+        continue;
+      }
+      resolved.push({ ...preset, brightnessAnchor: stage.anchor });
+    }
+    if (missing.length) {
+      console.warn('[Aether] Missing gradient presets in stages:', missing.join(', '));
+    }
+    if (resolved.length < 2) {
+      console.warn('[Aether] Gradient stage count is low; check stage configuration.');
+    }
+    for (let i = 1; i < resolved.length; i++) {
+      if (resolved[i].brightnessAnchor > resolved[i - 1].brightnessAnchor) {
+        console.warn('[Aether] Gradient anchors not descending; sorting anchors.');
+        resolved.sort((a, b) => b.brightnessAnchor - a.brightnessAnchor);
+        break;
+      }
+    }
+    return resolved;
+  }
+
+  const orderedGradients = buildOrderedGradients(gradientStages, gradientLookup);
 
   const gradientAnchors = orderedGradients.map(g => g.brightnessAnchor);
 
   function getGradientBlend(brightness) {
+    if (!gradientAnchors.length) return { a: 0, b: 0, t: 0 };
+    // Hold bright daylight a bit longer to avoid flickering out of haze-day.
+    if (brightness >= gradientAnchors[0] - 6) return { a: 0, b: 0, t: 0 };
     // Hard-lock true dark to the legacy deep-blue night gradient.
     if (brightness <= 32) {
       const lastIndex = gradientAnchors.length - 1;
@@ -475,39 +580,49 @@
   }
 
   // Text theme per brightness band
-  const textPresets = [
-    // Dawn: dark text on pastel sky
-    { text: [40,40,48],     tA: 1,    sub: [90,90,100],    sA: 1,    nav: [140,140,155], nA: 1 },
-    // Midday: white text on blue
-    { text: [255,255,255],  tA: 0.93, sub: [255,255,255],  sA: 0.55, nav: [255,255,255], nA: 0.32 },
-    // Night: soft warm white on navy
-    { text: [255,245,230],  tA: 0.85, sub: [255,245,230],  sA: 0.45, nav: [255,245,230], nA: 0.25 }
-  ];
-
-  const textAnchors = [220, 150, 55]; // Bright, medium, dark
-
-  function getTextBlend(brightness) {
-    if (brightness >= textAnchors[0]) return { a: 0, b: 0, t: 0 };
-    if (brightness <= textAnchors[2]) return { a: 2, b: 2, t: 0 };
-    for (let i = 0; i < textAnchors.length - 1; i++) {
-      if (brightness <= textAnchors[i] && brightness >= textAnchors[i + 1]) {
-        const raw = (textAnchors[i] - brightness) / (textAnchors[i] - textAnchors[i + 1]);
-        return { a: i, b: i + 1, t: smootherstep(raw) };
-      }
-    }
-    return { a: 0, b: 0, t: 0 };
-  }
+  // ARCHIVED — adaptive text colors that shifted based on ambient brightness:
+  // const textPresets = [
+  //   // Dawn: dark text on pastel sky
+  //   { text: [40,40,48],     tA: 1,    sub: [90,90,100],    sA: 1,    nav: [140,140,155], nA: 1 },
+  //   // Midday: white text on blue
+  //   { text: [255,255,255],  tA: 0.93, sub: [255,255,255],  sA: 0.55, nav: [255,255,255], nA: 0.32 },
+  //   // Night: soft warm white on navy
+  //   { text: [255,245,230],  tA: 0.85, sub: [255,245,230],  sA: 0.45, nav: [255,245,230], nA: 0.25 }
+  // ];
+  // const textAnchors = [220, 150, 55]; // Bright, medium, dark
+  // function getTextBlend(brightness) {
+  //   if (brightness >= textAnchors[0]) return { a: 0, b: 0, t: 0 };
+  //   if (brightness <= textAnchors[2]) return { a: 2, b: 2, t: 0 };
+  //   for (let i = 0; i < textAnchors.length - 1; i++) {
+  //     if (brightness <= textAnchors[i] && brightness >= textAnchors[i + 1]) {
+  //       const raw = (textAnchors[i] - brightness) / (textAnchors[i] - textAnchors[i + 1]);
+  //       return { a: i, b: i + 1, t: smootherstep(raw) };
+  //     }
+  //   }
+  //   return { a: 0, b: 0, t: 0 };
+  // }
 
   function computeTheme(brightness, warmth) {
     const gradBlend = getGradientBlend(brightness);
     const gradA = orderedGradients[gradBlend.a];
     const gradB = orderedGradients[gradBlend.b];
-    const layerA = buildGradientCss(gradA, 1 - gradBlend.t, warmth);
-    const layerB = buildGradientCss(gradB, gradBlend.t, warmth);
-    const gradient = gradBlend.a === gradBlend.b ? layerA : `${layerA}, ${layerB}`;
+    const layerA = buildGradientCss(gradA, warmth);
+    const layerB = buildGradientCss(gradB, warmth);
+    const blendOpacity = gradBlend.a === gradBlend.b ? 0 : clamp(Math.round(gradBlend.t * 1000) / 1000, 0, 1);
 
-    if (backgroundLayer) {
-      backgroundLayer.style.backgroundImage = gradient;
+    if (backgroundLayerA && backgroundLayerB) {
+      if (layerA !== lastGradientPaintA) {
+        backgroundLayerA.style.backgroundImage = layerA;
+        lastGradientPaintA = layerA;
+      }
+      if (layerB !== lastGradientPaintB) {
+        backgroundLayerB.style.backgroundImage = layerB;
+        lastGradientPaintB = layerB;
+      }
+      if (blendOpacity !== lastBlendOpacity) {
+        backgroundLayerB.style.opacity = blendOpacity.toFixed(3);
+        lastBlendOpacity = blendOpacity;
+      }
       // Solid colors for html/body so iOS overscroll regions and Safari
       // toolbar chrome match the gradient edges. html = top, body = bottom.
       const dominantPreset = orderedGradients[gradBlend.a];
@@ -525,42 +640,30 @@
       const topBg = rgbStr(topColor[0], topColor[1], topColor[2]);
       const bottomBg = rgbStr(bottomColor[0], bottomColor[1], bottomColor[2]);
 
-      document.documentElement.style.backgroundImage = 'none';
-      document.documentElement.style.backgroundColor = topBg;
-      document.body.style.backgroundImage = 'none';
-      document.body.style.backgroundColor = bottomBg;
+      if (topBg !== lastTopBg) {
+        document.documentElement.style.backgroundImage = 'none';
+        document.documentElement.style.backgroundColor = topBg;
+        lastTopBg = topBg;
+      }
+      if (bottomBg !== lastBottomBg) {
+        document.body.style.backgroundImage = 'none';
+        document.body.style.backgroundColor = bottomBg;
+        lastBottomBg = bottomBg;
+      }
       const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-      if (themeColorMeta) themeColorMeta.setAttribute('content', topBg);
+      if (themeColorMeta && topBg !== lastThemeColor) {
+        themeColorMeta.setAttribute('content', topBg);
+        lastThemeColor = topBg;
+      }
     } else {
-      document.body.style.background = gradient;
+      document.body.style.background = layerA;
+      lastGradientPaintA = layerA;
     }
 
-    // ── Text colors ──
-    const { a, b, t } = getTextBlend(brightness);
-    const pA = textPresets[a], pB = textPresets[b];
-    const txtRgb  = lerpColor(pA.text, pB.text, t);
-    const txtA    = lerp(pA.tA, pB.tA, t);
-    const subRgb  = lerpColor(pA.sub, pB.sub, t);
-    const subA    = lerp(pA.sA, pB.sA, t);
-    const navRgb  = lerpColor(pA.nav, pB.nav, t);
-    const navA    = lerp(pA.nA, pB.nA, t);
-    // Warmth shift
-    let ws = [0, 0, 0];
-    if (warmth > 0.3) {
-      const i = (warmth - 0.3) / 0.7;
-      ws = [8 * i, 4 * i, -4 * i];
-    } else if (warmth < -0.3) {
-      const i = (-warmth - 0.3) / 0.7;
-      ws = [-3 * i, -1 * i, 6 * i];
-    }
-
-    const mk = (rgb, alpha, w) => alpha < 1
-      ? rgbStr(clamp(rgb[0]+w[0],0,255), clamp(rgb[1]+w[1],0,255), clamp(rgb[2]+w[2],0,255), alpha)
-      : rgbStr(clamp(rgb[0]+w[0],0,255), clamp(rgb[1]+w[1],0,255), clamp(rgb[2]+w[2],0,255));
-
-    const primary = mk(txtRgb, txtA, ws);
-    const sub     = mk(subRgb, subA, ws);
-    const nav     = mk(navRgb, navA, ws);
+    // ── Text colors — always white ──
+    const primary = 'rgba(255,255,255,0.93)';
+    const sub     = 'rgba(255,255,255,0.55)';
+    const nav     = 'rgba(255,255,255,0.32)';
 
     document.querySelector('.headline').style.color = primary;
     document.querySelector('.subline').style.color = sub;
@@ -587,12 +690,12 @@
   // Animation loop
   function animate() {
     const bDelta = targetBrightness - currentBrightness;
-    const bFactor = adaptiveSettleFactor(bDelta, 90, 1.08, 0.84);
+    const bFactor = adaptiveSettleFactor(bDelta, 95, 1.04, 0.96);
     currentBrightness = lerp(currentBrightness, targetBrightness, bFactor);
 
     const wDelta = targetWarmth - currentWarmth;
     const wMagnitude = clamp(Math.abs(wDelta) / 0.45, 0, 1);
-    const wFactor = clamp(lerp(0.028, 0.010, wMagnitude), 0.008, 0.03);
+    const wFactor = clamp(lerp(0.05, 0.02, wMagnitude), 0.015, 0.06);
     currentWarmth = lerp(currentWarmth, targetWarmth, wFactor);
 
     if (Math.abs(currentBrightness - targetBrightness) < 0.03) currentBrightness = targetBrightness;
@@ -633,7 +736,7 @@
       analyzeLight();
       fadeIn();
 
-      setInterval(analyzeLight, 1400);
+      setInterval(analyzeLight, 900);
 
     } catch (e) {
       console.error('Camera init failed:', e.name, e.message);
@@ -667,9 +770,13 @@
     const data = imageData.data;
 
     let totalBrightness = 0;
+    let edgeBrightness = 0;
+    let edgeBrightnessCount = 0;
     let totalHighlight = 0;
     let totalWarmth = 0;
-    let count = 0;
+    let brightnessWeight = 0;
+    let warmthCount = 0;
+    const brightnessHist = new Float32Array(256);
 
     const topBound = Math.floor(h * 0.15);
     const botBound = Math.floor(h * 0.85);
@@ -678,34 +785,56 @@
 
     for (let y = 0; y < h; y += 2) {
       for (let x = 0; x < w; x += 2) {
-        if (y >= topBound && y <= botBound && x >= leftBound && x <= rightBound) continue;
-
         const i = (y * w + x) * 4;
         const r = data[i];
         const g = data[i + 1];
         const b = data[i + 2];
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const inCenter = y >= topBound && y <= botBound && x >= leftBound && x <= rightBound;
+        const weight = inCenter ? 0.24 : 1;
 
-        totalBrightness += (r + g + b) / 3;
-        totalHighlight += Math.max(r, g, b);
-        totalWarmth += (r - b) / 255;
-        count++;
+        // Brightness uses weighted full-frame sampling (center included) so
+        // dark ceilings/walls do not overpower ambient light level detection.
+        totalBrightness += luma * weight;
+        totalHighlight += Math.max(r, g, b) * weight;
+        brightnessWeight += weight;
+        brightnessHist[Math.round(clamp(luma, 0, 255))] += weight;
+
+        // Warmth remains edge-focused to avoid face/skin tone bias.
+        if (!inCenter) {
+          edgeBrightness += luma;
+          edgeBrightnessCount++;
+          totalWarmth += (r - b) / 255;
+          warmthCount++;
+        }
       }
     }
 
-    if (count > 0) {
-      const avgBrightness = clamp(totalBrightness / count, 0, 255);
-      const highlightBrightness = clamp(totalHighlight / count, 0, 255);
-      const rawBrightness = remapSensorBrightness(avgBrightness, highlightBrightness);
-      const rawWarmth = clamp(totalWarmth / count, -1, 1);
+    if (brightnessWeight > 0) {
+      const weightedAvgBrightness = clamp(totalBrightness / brightnessWeight, 0, 255);
+      const edgeAvgBrightness = edgeBrightnessCount > 0
+        ? clamp(edgeBrightness / edgeBrightnessCount, 0, 255)
+        : weightedAvgBrightness;
+      const avgBrightness = weightedAvgBrightness * 0.55 + edgeAvgBrightness * 0.45;
+      const highlightBrightness = clamp(totalHighlight / brightnessWeight, 0, 255);
+      const midPercentileBrightness = percentileFromHistogram(brightnessHist, brightnessWeight, 0.62);
+      const upperPercentileBrightness = percentileFromHistogram(brightnessHist, brightnessWeight, 0.78);
+      const rawBrightness = remapSensorBrightness(
+        avgBrightness,
+        midPercentileBrightness,
+        upperPercentileBrightness,
+        highlightBrightness
+      );
+      const rawWarmth = warmthCount > 0 ? clamp(totalWarmth / warmthCount, -1, 1) : 0;
 
       // Sensor-level damping prevents tiny flicker from nudging the theme.
       const bDiff = rawBrightness - sensedBrightness;
       const wDiff = rawWarmth - sensedWarmth;
-      const bAlpha = Math.abs(bDiff) > 30 ? 0.22 : 0.12;
-      const wAlpha = Math.abs(wDiff) > 0.25 ? 0.24 : 0.12;
+      const bAlpha = Math.abs(bDiff) > 26 ? 0.36 : 0.22;
+      const wAlpha = Math.abs(wDiff) > 0.2 ? 0.32 : 0.2;
 
-      if (Math.abs(bDiff) > 0.6) sensedBrightness = clamp(sensedBrightness + bDiff * bAlpha, 0, 255);
-      if (Math.abs(wDiff) > 0.015) sensedWarmth = clamp(sensedWarmth + wDiff * wAlpha, -1, 1);
+      if (Math.abs(bDiff) > 0.35) sensedBrightness = clamp(sensedBrightness + bDiff * bAlpha, 0, 255);
+      if (Math.abs(wDiff) > 0.01) sensedWarmth = clamp(sensedWarmth + wDiff * wAlpha, -1, 1);
 
       targetBrightness = sensedBrightness;
       targetWarmth = sensedWarmth;

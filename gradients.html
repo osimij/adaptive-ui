@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aether — Gradient Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    background: #0e0e12;
+    color: #b0b0bc;
+    min-height: 100vh;
+    padding: 56px 32px 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .page {
+    width: 100%;
+    max-width: 880px;
+  }
+
+  header {
+    margin-bottom: 56px;
+  }
+
+  header h1 {
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: -0.3px;
+    color: #e2e2ea;
+    margin-bottom: 6px;
+  }
+
+  header p {
+    font-size: 13px;
+    letter-spacing: -0.1px;
+    color: #6e6e7a;
+  }
+
+  .grid {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .card-label {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .card-label h2 {
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: -0.2px;
+    color: #d0d0da;
+  }
+
+  .card-label span {
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: #55555f;
+  }
+
+  .swatch {
+    width: 100%;
+    height: 200px;
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .swatch::before {
+    content: '';
+    position: absolute;
+    inset: -40px;
+    z-index: 1;
+    background: inherit;
+    filter: blur(40px);
+  }
+
+  /* Film grain overlay */
+  .swatch::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    opacity: 0.03;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='250'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 250px 250px;
+    border-radius: 12px;
+  }
+
+  .stops-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .stop {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #18181e;
+    border-radius: 6px;
+    padding: 4px 8px 4px 4px;
+  }
+
+  .stop-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .stop-hex {
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    color: #88889a;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── Individual gradients ─── */
+
+  #swatch-haze-day {
+    background: linear-gradient(
+      180deg,
+      #87B3E1 20.02%,
+      #C0B9D0 43.08%,
+      #CBB9CD 50.81%,
+      #CFAEC7 61.34%,
+      #CAA5C5 68.56%,
+      #C39EC4 76.56%,
+      #7B9ED4 100%
+    );
+  }
+
+  #swatch-dim-radial {
+    background: linear-gradient(
+      0deg,
+      #FC550E 0%,
+      #F07824 13.97%,
+      #E9822C 21.9%,
+      #CF893A 30.35%,
+      #AC8044 38.92%,
+      #434C4D 59.22%,
+      #222D35 71.88%,
+      #080B0E 89%
+    );
+  }
+
+  /* ─── Archived: mid-neutral ───
+  #swatch-mid-neutral {
+    background: linear-gradient(
+      180deg,
+      #356B98 22.56%,
+      #6F7D9B 37.4%,
+      #B8918C 49.5%,
+      #D6AB90 60.2%,
+      #FFCF7D 71.69%,
+      #FDB45A 83.2%,
+      #FB8C29 96.5%
+    );
+  }
+  */
+
+  #swatch-sunset-band {
+    background: linear-gradient(
+      180deg,
+      #4D70AA 9.26%,
+      #8D839D 27.4%,
+      #AC8B96 34.27%,
+      #BD8D90 40.22%,
+      #D18881 48.81%,
+      #FF694E 76.64%,
+      #FB9E34 100%
+    );
+  }
+
+  #swatch-deep-night-blue {
+    background: linear-gradient(
+      180deg,
+      #040941 11.49%,
+      #052664 55%,
+      #003C9F 91.46%
+    );
+  }
+
+  .back {
+    display: inline-block;
+    margin-bottom: 32px;
+    font-size: 13px;
+    color: #55555f;
+    text-decoration: none;
+    letter-spacing: -0.1px;
+    transition: color 0.2s;
+  }
+  .back:hover { color: #9090a0; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <a href="/" class="back">&larr; Back</a>
+    <header>
+      <h1>Gradient Map</h1>
+      <p>All ambient-adaptive gradients used in Aether, rendered at their authored stops.</p>
+    </header>
+
+    <div class="grid">
+
+      <!-- 1. Haze Day -->
+      <div class="card">
+        <div class="card-label">
+          <h2>haze-day</h2>
+          <span>Linear &middot; 180deg</span>
+        </div>
+        <div class="swatch" id="swatch-haze-day"></div>
+        <div class="stops-row">
+          <div class="stop"><div class="stop-dot" style="background:#87B3E1"></div><span class="stop-hex">#87B3E1</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#C0B9D0"></div><span class="stop-hex">#C0B9D0</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#CBB9CD"></div><span class="stop-hex">#CBB9CD</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#CFAEC7"></div><span class="stop-hex">#CFAEC7</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#CAA5C5"></div><span class="stop-hex">#CAA5C5</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#C39EC4"></div><span class="stop-hex">#C39EC4</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#7B9ED4"></div><span class="stop-hex">#7B9ED4</span></div>
+        </div>
+      </div>
+
+      <!-- 2. Dim Radial -->
+      <div class="card">
+        <div class="card-label">
+          <h2>dim-radial</h2>
+          <span>Linear &middot; 0deg</span>
+        </div>
+        <div class="swatch" id="swatch-dim-radial"></div>
+        <div class="stops-row">
+          <div class="stop"><div class="stop-dot" style="background:#FC550E"></div><span class="stop-hex">#FC550E</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#F07824"></div><span class="stop-hex">#F07824</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#E9822C"></div><span class="stop-hex">#E9822C</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#CF893A"></div><span class="stop-hex">#CF893A</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#AC8044"></div><span class="stop-hex">#AC8044</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#434C4D"></div><span class="stop-hex">#434C4D</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#222D35"></div><span class="stop-hex">#222D35</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#080B0E"></div><span class="stop-hex">#080B0E</span></div>
+        </div>
+      </div>
+
+      <!-- 3. Mid Neutral (archived) -->
+
+      <!-- 4. Sunset Band -->
+      <div class="card">
+        <div class="card-label">
+          <h2>sunset-band</h2>
+          <span>Linear &middot; 180deg</span>
+        </div>
+        <div class="swatch" id="swatch-sunset-band"></div>
+        <div class="stops-row">
+          <div class="stop"><div class="stop-dot" style="background:#4D70AA"></div><span class="stop-hex">#4D70AA</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#8D839D"></div><span class="stop-hex">#8D839D</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#AC8B96"></div><span class="stop-hex">#AC8B96</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#BD8D90"></div><span class="stop-hex">#BD8D90</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#D18881"></div><span class="stop-hex">#D18881</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#FF694E"></div><span class="stop-hex">#FF694E</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#FB9E34"></div><span class="stop-hex">#FB9E34</span></div>
+        </div>
+      </div>
+
+      <!-- 5. Deep Night Blue -->
+      <div class="card">
+        <div class="card-label">
+          <h2>deep-night-blue</h2>
+          <span>Linear &middot; 180deg</span>
+        </div>
+        <div class="swatch" id="swatch-deep-night-blue"></div>
+        <div class="stops-row">
+          <div class="stop"><div class="stop-dot" style="background:#040941"></div><span class="stop-hex">#040941</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#052664"></div><span class="stop-hex">#052664</span></div>
+          <div class="stop"><div class="stop-dot" style="background:#003C9F"></div><span class="stop-hex">#003C9F</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
