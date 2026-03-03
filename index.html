@@ -234,13 +234,11 @@
   let canvas = null;
   let ctx = null;
   let animFrameId = null;
-  let cameraRequestInFlight = false;
 
   const indicator = document.getElementById('cameraIndicator');
   const signature = document.getElementById('footerSignature');
   const prompt = document.getElementById('cameraPrompt');
-  const coarsePointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-  const needsUserGesture = coarsePointer || navigator.maxTouchPoints > 0;
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   // Helpers
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -429,40 +427,14 @@
   }
 
   // Camera & light analysis
-  async function getCameraStream() {
-    const tries = [
-      { video: { facingMode: { ideal: 'user' }, width: { ideal: 320 }, height: { ideal: 240 } }, audio: false },
-      { video: { facingMode: { ideal: 'environment' } }, audio: false },
-      { video: true, audio: false }
-    ];
-    let lastError = null;
-    for (const constraints of tries) {
-      try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (err) {
-        lastError = err;
-        if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
-          throw err;
-        }
-      }
-    }
-    throw lastError || new Error('No camera stream available');
-  }
-
   async function initCamera() {
-    if (cameraActive || cameraRequestInFlight) return;
-    cameraRequestInFlight = true;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       console.warn('getUserMedia not available — requires HTTPS');
       cameraUnavailable();
-      cameraRequestInFlight = false;
       return;
     }
-    if (!window.isSecureContext) {
-      console.warn('Camera access requires a secure context (HTTPS).');
-    }
     try {
-      const stream = await getCameraStream();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 160, height: 120 } });
       video = document.createElement('video');
       video.srcObject = stream;
       video.setAttribute('playsinline', '');
@@ -492,8 +464,6 @@
     } catch (e) {
       console.error('Camera init failed:', e.name, e.message);
       cameraUnavailable();
-    } finally {
-      cameraRequestInFlight = false;
     }
   }
 
@@ -564,31 +534,18 @@
   // Start
   animate();
 
-  if (needsUserGesture) {
-    // Touch-first devices: wait for a direct user gesture
+  if (isMobile) {
+    // Mobile: show tap prompt, fade in with defaults, wait for gesture
     firstReadingDone = true;
     fadeIn();
     setTimeout(() => {
       prompt.classList.remove('hidden');
     }, 1800);
-
-    let gestureHandled = false;
-    const gestureHandler = () => {
-      if (gestureHandled) return;
-      gestureHandled = true;
+    prompt.addEventListener('click', function handler() {
       prompt.classList.add('hidden');
-      window.removeEventListener('pointerdown', gestureHandler);
-      window.removeEventListener('touchend', gestureHandler);
-      document.removeEventListener('keydown', gestureHandler);
-      prompt.removeEventListener('click', gestureHandler);
       initCamera();
-    };
-
-    // Any first interaction can unlock media permission prompts on mobile browsers.
-    window.addEventListener('pointerdown', gestureHandler, { passive: true });
-    window.addEventListener('touchend', gestureHandler, { passive: true });
-    document.addEventListener('keydown', gestureHandler);
-    prompt.addEventListener('click', gestureHandler);
+      prompt.removeEventListener('click', handler);
+    });
   } else {
     initCamera();
   }
