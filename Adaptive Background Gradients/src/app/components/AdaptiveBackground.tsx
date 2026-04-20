@@ -25,32 +25,6 @@ const GRADIENT_DEFS: GradientDef[] = [
     ],
   },
   {
-    // Dim Radial
-    prefix: "radial-gradient(328.13% 100% at 50% 100%, ",
-    stops: [
-      { r: 252, g: 85, b: 14, position: "9%" },
-      { r: 240, g: 161, b: 74, position: "24%" },
-      { r: 192, g: 138, b: 115, position: "39%" },
-      { r: 125, g: 106, b: 114, position: "53%" },
-      { r: 63, g: 69, b: 91, position: "67%" },
-      { r: 26, g: 32, b: 48, position: "80%" },
-      { r: 3, g: 4, b: 6, position: "89%" },
-    ],
-  },
-  {
-    // Mid Neutral
-    prefix: "linear-gradient(180deg, ",
-    stops: [
-      { r: 53, g: 107, b: 152, position: "23%" },
-      { r: 111, g: 125, b: 155, position: "37%" },
-      { r: 184, g: 145, b: 140, position: "50%" },
-      { r: 214, g: 171, b: 144, position: "60%" },
-      { r: 255, g: 207, b: 125, position: "72%" },
-      { r: 253, g: 180, b: 90, position: "83%" },
-      { r: 251, g: 140, b: 41, position: "97%" },
-    ],
-  },
-  {
     // Sunset Band
     prefix: "linear-gradient(180deg, ",
     stops: [
@@ -235,39 +209,6 @@ function oklchToRgb(
   return oklabToRgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
 }
 
-function blendColorsOklch(
-  colors: Array<{ r: number; g: number; b: number }>,
-  weights: number[]
-): { r: number; g: number; b: number } {
-  let totalW = 0;
-  let L = 0,
-    C = 0,
-    hSin = 0,
-    hCos = 0;
-
-  for (let i = 0; i < colors.length; i++) {
-    const w = weights[i];
-    if (w < 0.001) continue;
-    totalW += w;
-    const [li, ci, hi] = rgbToOklch(colors[i].r, colors[i].g, colors[i].b);
-    L += li * w;
-    C += ci * w;
-    const hRad = hi * (Math.PI / 180);
-    hSin += Math.sin(hRad) * w;
-    hCos += Math.cos(hRad) * w;
-  }
-
-  if (totalW < 0.001) return { r: 0, g: 0, b: 0 };
-
-  L /= totalW;
-  C /= totalW;
-  let h = Math.atan2(hSin / totalW, hCos / totalW) * (180 / Math.PI);
-  if (h < 0) h += 360;
-
-  const [r, g, b] = oklchToRgb(L, C, h);
-  return { r, g, b };
-}
-
 // ── Warmth color shift ──────────────────────────────────────────────────
 
 const WARMTH_DEAD_ZONE = 0.3;
@@ -279,7 +220,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function applyWarmthShift(
-  stop: ColorStop,
+  color: { r: number; g: number; b: number },
   warmth: number
 ): { r: number; g: number; b: number } {
   let sr = 0,
@@ -297,18 +238,10 @@ function applyWarmthShift(
     sb = COOL_SHIFT.b * t;
   }
   return {
-    r: clamp(Math.round(stop.r + sr), 0, 255),
-    g: clamp(Math.round(stop.g + sg), 0, 255),
-    b: clamp(Math.round(stop.b + sb), 0, 255),
+    r: clamp(Math.round(color.r + sr), 0, 255),
+    g: clamp(Math.round(color.g + sg), 0, 255),
+    b: clamp(Math.round(color.b + sb), 0, 255),
   };
-}
-
-function buildGradientCSS(def: GradientDef, warmth: number): string {
-  const stopStrs = def.stops.map((stop) => {
-    const { r, g, b } = applyWarmthShift(stop, warmth);
-    return `rgb(${r}, ${g}, ${b}) ${stop.position}`;
-  });
-  return def.prefix + stopStrs.join(", ") + ")";
 }
 
 // ── Brightness → gradient weights (smoothstep) ─────────────────────────
@@ -321,14 +254,12 @@ function buildGradientCSS(def: GradientDef, warmth: number): string {
 // endpoints. Gradients fade in and out with perfect ease.
 //
 // Center placement rationale (brightness → gradient):
-//   0–80   Deep Night Blue  — dark room with slight ambient light
-//  55–135  Dim Radial       — mid-dim, lamplight, evening
-// 110–190  Mid Neutral      — mixed light, overcast daylight
-// 160–240  Sunset Band      — well-lit warm room
-// 200–255  Haze Day         — bright daylight, open windows
+//   0–140  Deep Night Blue  — dark / dim room, lamplight, evening
+//  60–240  Sunset Band      — mixed light, well-lit warm room
+// 150–255  Haze Day         — bright daylight, open windows
 
-const CENTERS = [50, 105, 155, 200, 240];
-const SPREAD = 55;
+const CENTERS = [50, 150, 240];
+const SPREAD = 90;
 
 function smoothstep(t: number): number {
   return t * t * (3 - 2 * t);
@@ -341,37 +272,8 @@ function getGradientWeights(brightness: number): number[] {
     return smoothstep(linear);
   });
   const total = raw.reduce((a, c) => a + c, 0);
-  if (total === 0) return [0, 0, 0, 0, 1];
+  if (total === 0) return [0, 0, 1];
   return raw.map((w) => w / total);
-}
-
-// ── Edge color extraction (OKLCh blended) ────────────────────────────────
-
-function getBlendedEdgeColors(
-  weights: number[],
-  warmth: number
-): {
-  top: { r: number; g: number; b: number };
-  bottom: { r: number; g: number; b: number };
-} {
-  const topColors: Array<{ r: number; g: number; b: number }> = [];
-  const bottomColors: Array<{ r: number; g: number; b: number }> = [];
-  const activeWeights: number[] = [];
-
-  for (let i = 0; i < GRADIENT_COUNT; i++) {
-    if (weights[i] < 0.001) continue;
-    const def = GRADIENT_DEFS[i];
-    topColors.push(applyWarmthShift(def.stops[0], warmth));
-    bottomColors.push(
-      applyWarmthShift(def.stops[def.stops.length - 1], warmth)
-    );
-    activeWeights.push(weights[i]);
-  }
-
-  return {
-    top: blendColorsOklch(topColors, activeWeights),
-    bottom: blendColorsOklch(bottomColors, activeWeights),
-  };
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -379,6 +281,136 @@ function rgbToHex(r: number, g: number, b: number): string {
     "#" +
     [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")
   );
+}
+
+// ── Composite gradient builder (perceptual cross-blend) ──────────────────
+//
+// Previous: N overlapping layers with alpha compositing in sRGB. At mid-
+// crossfade (e.g. Deep Night Blue → Sunset Band) the result was muddy —
+// sRGB alpha blending darkens & desaturates the perceptual midpoint.
+//
+// Now: resample every source gradient at a shared grid of vertical
+// positions, blend those samples in OKLCh using the smoothstep weights,
+// and emit ONE composite linear-gradient. Result: perceptually uniform
+// transitions, no alpha-compositing energy loss, single paint per frame.
+
+const SAMPLE_COUNT = 21; // every 5% of the gradient height
+const SAMPLE_POSITIONS: number[] = Array.from(
+  { length: SAMPLE_COUNT },
+  (_, i) => i / (SAMPLE_COUNT - 1)
+);
+
+function parsePosition(s: string): number {
+  return parseFloat(s) / 100;
+}
+
+// Linear-in-sRGB sample between authored stops — matches how CSS itself
+// interpolates within a single gradient, preserving each source's look.
+function sampleStopRGB(
+  stops: Array<{ r: number; g: number; b: number; pos: number }>,
+  p: number
+): { r: number; g: number; b: number } {
+  if (p <= stops[0].pos) {
+    return { r: stops[0].r, g: stops[0].g, b: stops[0].b };
+  }
+  const last = stops[stops.length - 1];
+  if (p >= last.pos) {
+    return { r: last.r, g: last.g, b: last.b };
+  }
+  for (let i = 1; i < stops.length; i++) {
+    const hi = stops[i];
+    if (p <= hi.pos) {
+      const lo = stops[i - 1];
+      const t = (p - lo.pos) / (hi.pos - lo.pos);
+      return {
+        r: lo.r + (hi.r - lo.r) * t,
+        g: lo.g + (hi.g - lo.g) * t,
+        b: lo.b + (hi.b - lo.b) * t,
+      };
+    }
+  }
+  return { r: last.r, g: last.g, b: last.b };
+}
+
+// Precompute OKLCh samples once per gradient — warmth & weights vary per
+// frame, but these are fixed. ~63 cbrt/atan2 calls at module load.
+const GRADIENT_OKLCH_SAMPLES: Array<Array<[number, number, number]>> =
+  GRADIENT_DEFS.map((def) => {
+    const parsed = def.stops.map((s) => ({
+      r: s.r,
+      g: s.g,
+      b: s.b,
+      pos: parsePosition(s.position),
+    }));
+    return SAMPLE_POSITIONS.map((p) => {
+      const { r, g, b } = sampleStopRGB(parsed, p);
+      return rgbToOklch(r, g, b);
+    });
+  });
+
+function buildCompositeGradient(
+  weights: number[],
+  warmth: number
+): {
+  css: string;
+  top: { r: number; g: number; b: number };
+  bottom: { r: number; g: number; b: number };
+} {
+  const activeIdx: number[] = [];
+  const activeWeights: number[] = [];
+  for (let i = 0; i < GRADIENT_COUNT; i++) {
+    if (weights[i] > 0.001) {
+      activeIdx.push(i);
+      activeWeights.push(weights[i]);
+    }
+  }
+  if (activeIdx.length === 0) {
+    activeIdx.push(GRADIENT_COUNT - 1);
+    activeWeights.push(1);
+  }
+
+  const stopStrs: string[] = new Array(SAMPLE_COUNT);
+  let topRGB = { r: 0, g: 0, b: 0 };
+  let bottomRGB = { r: 0, g: 0, b: 0 };
+
+  for (let posIdx = 0; posIdx < SAMPLE_COUNT; posIdx++) {
+    let totalW = 0;
+    let L = 0,
+      C = 0,
+      hSin = 0,
+      hCos = 0;
+
+    for (let k = 0; k < activeIdx.length; k++) {
+      const w = activeWeights[k];
+      const [li, ci, hi] = GRADIENT_OKLCH_SAMPLES[activeIdx[k]][posIdx];
+      L += li * w;
+      C += ci * w;
+      const hRad = hi * (Math.PI / 180);
+      hSin += Math.sin(hRad) * w;
+      hCos += Math.cos(hRad) * w;
+      totalW += w;
+    }
+
+    L /= totalW;
+    C /= totalW;
+    let h = Math.atan2(hSin / totalW, hCos / totalW) * (180 / Math.PI);
+    if (h < 0) h += 360;
+
+    const [r, g, b] = oklchToRgb(L, C, h);
+    const warmed = applyWarmthShift({ r, g, b }, warmth);
+    stopStrs[posIdx] = `rgb(${warmed.r}, ${warmed.g}, ${warmed.b}) ${(
+      SAMPLE_POSITIONS[posIdx] * 100
+    ).toFixed(1)}%`;
+
+    if (posIdx === 0) topRGB = warmed;
+    if (posIdx === SAMPLE_COUNT - 1) bottomRGB = warmed;
+  }
+
+  return {
+    css: `linear-gradient(180deg, ${stopStrs.join(", ")})`,
+    top: topRGB,
+    bottom: bottomRGB,
+  };
 }
 
 // ── Meta tag helpers ─────────────────────────────────────────────────────
@@ -398,50 +430,6 @@ function getOrCreateMeta(
   return el;
 }
 
-// ── Correct opacity compositing ──────────────────────────────────────────
-//
-// Previous: each layer at its own weight (e.g. two layers at 0.5 + 0.5).
-// This produces 25% bottom + 50% top + 25% transparent due to alpha-over
-// compositing — a visible darkening/desaturation dip at every midpoint.
-//
-// Fix: the lower active layer renders at opacity 1 (fully opaque base),
-// the upper active layer at its blend ratio. This gives exact linear
-// interpolation: ratio·overlay + (1-ratio)·base with zero energy loss.
-//
-// At most 2 gradients are ever active (adjacent CENTERS are SPREAD apart),
-// and their normalized weights always sum to 1.0.
-
-function computeLayerOpacities(weights: number[]): number[] {
-  const opacities = new Array(GRADIENT_COUNT).fill(0);
-
-  // Find active layers (weight > 0.001)
-  let baseIdx = -1;
-  let overlayIdx = -1;
-
-  for (let i = 0; i < GRADIENT_COUNT; i++) {
-    if (weights[i] > 0.001) {
-      if (baseIdx === -1) {
-        baseIdx = i;
-      } else {
-        overlayIdx = i;
-      }
-    }
-  }
-
-  if (baseIdx === -1) return opacities;
-
-  if (overlayIdx === -1) {
-    // Single active gradient — full opacity
-    opacities[baseIdx] = 1;
-  } else {
-    // Two active gradients — base at 1.0, overlay at its normalized weight
-    opacities[baseIdx] = 1;
-    opacities[overlayIdx] = weights[overlayIdx];
-  }
-
-  return opacities;
-}
-
 // ── Component ────────────────────────────────────────────────────────────
 
 interface AdaptiveBackgroundProps {
@@ -455,8 +443,8 @@ export function AdaptiveBackground({
   targetWarmth,
   onGradientPainted,
 }: AdaptiveBackgroundProps) {
-  const layerRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const lastPaintedOpacitiesRef = useRef<number[]>(
+  const layerRef = useRef<HTMLDivElement | null>(null);
+  const lastPaintedWeightsRef = useRef<number[]>(
     new Array(GRADIENT_COUNT).fill(-1)
   );
   const lastPaintedWarmthRef = useRef<number>(NaN);
@@ -464,15 +452,12 @@ export function AdaptiveBackground({
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
-  // Spring state
   const brightSpring = useRef<Spring>({ value: targetBrightness, velocity: 0 });
   const warmthSpring = useRef<Spring>({ value: targetWarmth, velocity: 0 });
 
-  // Targets (updated via useEffect to avoid stale closures)
   const targetBrightnessRef = useRef(targetBrightness);
   const targetWarmthRef = useRef(targetWarmth);
 
-  // Callback management
   const paintedCallbackFired = useRef(false);
   const hasInitialPaintRef = useRef(false);
   const onGradientPaintedRef = useRef(onGradientPainted);
@@ -497,9 +482,8 @@ export function AdaptiveBackground({
     targetWarmthRef.current = targetWarmth;
   }, [targetWarmth]);
 
-  const updateEdgeColors = useCallback(
-    (weights: number[], warmth: number) => {
-      const { top, bottom } = getBlendedEdgeColors(weights, warmth);
+  const applyEdgeColors = useCallback(
+    (top: { r: number; g: number; b: number }, bottom: { r: number; g: number; b: number }) => {
       const topHex = rgbToHex(top.r, top.g, top.b);
       const bottomHex = rgbToHex(bottom.r, bottom.g, bottom.b);
       document.documentElement.style.backgroundColor = topHex;
@@ -513,9 +497,23 @@ export function AdaptiveBackground({
     []
   );
 
+  const paintComposite = useCallback(
+    (weights: number[], warmth: number) => {
+      const el = layerRef.current;
+      if (!el) return;
+      const { css, top, bottom } = buildCompositeGradient(weights, warmth);
+      el.style.backgroundImage = css;
+      applyEdgeColors(top, bottom);
+      for (let i = 0; i < GRADIENT_COUNT; i++) {
+        lastPaintedWeightsRef.current[i] = weights[i];
+      }
+      lastPaintedWarmthRef.current = warmth;
+    },
+    [applyEdgeColors]
+  );
+
   const tick = useCallback(
     (now: number) => {
-      // ── Timestep ──
       if (lastTimeRef.current === 0) lastTimeRef.current = now;
       const rawDt = (now - lastTimeRef.current) / 1000;
       lastTimeRef.current = now;
@@ -526,7 +524,6 @@ export function AdaptiveBackground({
       const bs = brightSpring.current;
       const ws = warmthSpring.current;
 
-      // ── Step brightness spring (asymmetric pupil response) ──
       const bSettled = isSettled(
         bs,
         tB,
@@ -534,14 +531,12 @@ export function AdaptiveBackground({
         BRIGHTNESS_SETTLE_VEL
       );
       if (!bSettled) {
-        // Brightening: fast constriction. Darkening: slow dilation.
         const omega = tB > bs.value ? BRIGHT_OMEGA : DARK_OMEGA;
         stepSpring(bs, tB, omega, dt);
       } else {
         settleSpring(bs, tB);
       }
 
-      // ── Step warmth spring ──
       const wSettled = isSettled(
         ws,
         tW,
@@ -554,7 +549,6 @@ export function AdaptiveBackground({
         settleSpring(ws, tW);
       }
 
-      // ── CSS custom properties (every frame when active) ──
       const root = document.documentElement;
       root.style.setProperty(
         "--ambient-brightness",
@@ -562,77 +556,42 @@ export function AdaptiveBackground({
       );
       root.style.setProperty("--ambient-warmth", ws.value.toFixed(3));
 
-      // ── Paint if either spring is still moving ──
       if (!bSettled || !wSettled) {
         const weights = getGradientWeights(bs.value);
-        const opacities = computeLayerOpacities(weights);
-        const lastOpacities = lastPaintedOpacitiesRef.current;
+        const lastWeights = lastPaintedWeightsRef.current;
 
+        let weightsDirty = false;
+        for (let i = 0; i < GRADIENT_COUNT; i++) {
+          if (Math.abs(weights[i] - lastWeights[i]) > 0.0005) {
+            weightsDirty = true;
+            break;
+          }
+        }
         const warmthDirty =
           Number.isNaN(lastPaintedWarmthRef.current) ||
           Math.abs(ws.value - lastPaintedWarmthRef.current) > 0.003;
 
-        let anyPaint = false;
+        if (weightsDirty || warmthDirty) {
+          paintComposite(weights, ws.value);
 
-        for (let i = 0; i < GRADIENT_COUNT; i++) {
-          const el = layerRefs.current[i];
-          if (!el) continue;
-
-          const opDiff = Math.abs(opacities[i] - lastOpacities[i]) > 0.0005;
-          const needsGradientUpdate =
-            warmthDirty && opacities[i] > 0.001;
-
-          if (opDiff || needsGradientUpdate) {
-            anyPaint = true;
-            if (opDiff) {
-              el.style.opacity = String(opacities[i]);
-              lastOpacities[i] = opacities[i];
-            }
-            if (needsGradientUpdate) {
-              el.style.backgroundImage = buildGradientCSS(
-                GRADIENT_DEFS[i],
-                ws.value
-              );
-            }
+          if (
+            !paintedCallbackFired.current &&
+            onGradientPaintedRef.current
+          ) {
+            paintedCallbackFired.current = true;
+            onGradientPaintedRef.current();
           }
-        }
-
-        if (anyPaint) {
-          if (warmthDirty) lastPaintedWarmthRef.current = ws.value;
-          updateEdgeColors(weights, ws.value);
-        }
-
-        if (
-          !paintedCallbackFired.current &&
-          anyPaint &&
-          onGradientPaintedRef.current
-        ) {
-          paintedCallbackFired.current = true;
-          onGradientPaintedRef.current();
         }
       }
 
       rafRef.current = requestAnimationFrame(tick);
     },
-    [updateEdgeColors]
+    [paintComposite]
   );
 
-  // ── Initialize and start rAF loop ──
   useEffect(() => {
     const weights = getGradientWeights(brightSpring.current.value);
-    const opacities = computeLayerOpacities(weights);
-    const w = warmthSpring.current.value;
-
-    for (let i = 0; i < GRADIENT_COUNT; i++) {
-      const el = layerRefs.current[i];
-      if (el) {
-        el.style.opacity = String(opacities[i]);
-        el.style.backgroundImage = buildGradientCSS(GRADIENT_DEFS[i], w);
-      }
-      lastPaintedOpacitiesRef.current[i] = opacities[i];
-    }
-    lastPaintedWarmthRef.current = w;
-    updateEdgeColors(weights, w);
+    paintComposite(weights, warmthSpring.current.value);
     hasInitialPaintRef.current = true;
 
     if (onGradientPaintedRef.current && !paintedCallbackFired.current) {
@@ -650,33 +609,24 @@ export function AdaptiveBackground({
       warmthSpring.current.value.toFixed(3)
     );
 
-    lastTimeRef.current = 0; // reset so first tick computes correct dt
+    lastTimeRef.current = 0;
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [tick, updateEdgeColors]);
+  }, [tick, paintComposite]);
 
   return (
-    <>
-      {GRADIENT_DEFS.map((_, i) => (
-        <div
-          key={i}
-          ref={(el) => {
-            layerRefs.current[i] = el;
-          }}
-          style={{
-            position: "fixed",
-            // Extend 2px past viewport on all sides to prevent iOS sub-pixel
-            // hairline gaps at safe-area boundaries and home indicator edge
-            top: "-2px",
-            right: "-2px",
-            bottom: "-2px",
-            left: "-2px",
-            opacity: 0,
-            zIndex: i,
-            willChange: "opacity",
-          }}
-        />
-      ))}
-    </>
+    <div
+      ref={layerRef}
+      style={{
+        position: "fixed",
+        // Extend 2px past viewport on all sides to prevent iOS sub-pixel
+        // hairline gaps at safe-area boundaries and home indicator edge
+        top: "-2px",
+        right: "-2px",
+        bottom: "-2px",
+        left: "-2px",
+        willChange: "background-image",
+      }}
+    />
   );
 }
